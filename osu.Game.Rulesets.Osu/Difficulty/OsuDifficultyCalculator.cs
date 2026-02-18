@@ -172,6 +172,17 @@ namespace osu.Game.Rulesets.Osu.Difficulty
                 objects.Add(new OsuDifficultyHitObject(beatmap.HitObjects[i], beatmap.HitObjects[i - 1], clockRate, objects, objects.Count));
             }
 
+            var osuDifficultyHitObjects = objects.Cast<OsuDifficultyHitObject>().ToList();
+            // TODO: potentially modify the superclass's CreateDifficultyHitObjects to take in a mods parameter so this is only populated if TD is enabled.
+            var touchActions = OsuTouchActionSequenceOptimizer.FindOptimalActionSequence(osuDifficultyHitObjects);
+
+            OsuTouchDataIncrementalState touchDataState = OsuTouchDataIncrementalState.INITIAL;
+            for (int i = 0; i < osuDifficultyHitObjects.Count; i++)
+            {
+                var result = OsuTouchDataIncrementalState.Advance(touchDataState, osuDifficultyHitObjects[i], touchActions[i]);
+                touchDataState = result.NextState;
+                osuDifficultyHitObjects[i].TouchData = result.TouchData;
+            }
             return objects;
         }
 

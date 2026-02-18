@@ -1,4 +1,4 @@
-﻿// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
+// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
@@ -20,7 +20,18 @@ namespace osu.Game.Rulesets.Osu.Difficulty.Skills
     /// </summary>
     public class Aim : OsuStrainSkill
     {
+        private const double skill_multiplier_aim = 25.85;
+        private const double skill_multiplier_speed = 1.35;
+        private const double skill_multiplier_total = 1.0;
+        private const double mean_exponent = 1.2;
+        private const double strain_decay_base_aim = 0.15;
+        private const double strain_decay_base_speed = 0.3;
+
         public readonly bool IncludeSliders;
+
+        private readonly List<double> sliderStrains = new List<double>();
+
+        private StrainState strainState;
 
         public Aim(Mod[] mods, bool includeSliders)
             : base(mods)
@@ -28,55 +39,87 @@ namespace osu.Game.Rulesets.Osu.Difficulty.Skills
             IncludeSliders = includeSliders;
         }
 
-        private double currentAimStrain;
-        private double currentSpeedStrain;
+        public readonly struct StrainState
+        {
+            public readonly double CurrentAimStrain;
+            public readonly double CurrentSpeedStrain;
 
-        private double skillMultiplierAim => 25.85;
-        private double skillMultiplierSpeed => 1.35;
-        private double skillMultiplierTotal => 1.0;
-        private double meanExponent => 1.2;
+            public StrainState(double currentAimStrain, double currentSpeedStrain)
+            {
+                CurrentAimStrain = currentAimStrain;
+                CurrentSpeedStrain = currentSpeedStrain;
+            }
+        }
 
-        private readonly List<double> sliderStrains = new List<double>();
+        private static double strainDecayAim(double ms) => Math.Pow(strain_decay_base_aim, ms / 1000);
+        private static double strainDecaySpeed(double ms) => Math.Pow(strain_decay_base_speed, ms / 1000);
 
-        private double strainDecayAim(double ms) => Math.Pow(0.15, ms / 1000);
-        private double strainDecaySpeed(double ms) => Math.Pow(0.3, ms / 1000);
-
-        protected override double CalculateInitialStrain(double time, DifficultyHitObject current) =>
-            DifficultyCalculationUtils.Norm(meanExponent,
-                currentAimStrain * strainDecayAim(time - current.Previous(0).StartTime),
-                currentSpeedStrain * strainDecaySpeed(time - current.Previous(0).StartTime)) * skillMultiplierTotal;
-
-        protected override double StrainValueAt(DifficultyHitObject current)
+        /// <summary>
+        /// Computes the next aim strain state by applying strain decay and evaluating the current object's aim and speed-aim difficulty.
+        /// </summary>
+        public static StrainState AdvanceStrainState(StrainState strainState, DifficultyHitObject current, bool isTouch, bool includeSliders, bool suppressSpeedComponent = false)
         {
             double decayAim = strainDecayAim(((OsuDifficultyHitObject)current).AdjustedDeltaTime);
             double decaySpeed = strainDecaySpeed(((OsuDifficultyHitObject)current).AdjustedDeltaTime);
 
-            double aimDifficulty = AimEvaluator.EvaluateDifficultyOf(current, IncludeSliders);
-            double speedDifficulty = SpeedAimEvaluator.EvaluateDifficultyOf(current);
+            double aimDifficulty;
+            double speedDifficulty;
 
-            if (Mods.Any(m => m is OsuModTouchDevice))
+            if (isTouch)
             {
-                aimDifficulty = Math.Pow(aimDifficulty, 0.8);
-                speedDifficulty = Math.Pow(speedDifficulty, 0.95);
+                aimDifficulty = TouchAimEvaluator.EvaluateDifficultyOf(current, includeSliders);
+                speedDifficulty = TouchSpeedAimEvaluator.EvaluateDifficultyOf(current);
+            }
+            else
+            {
+                aimDifficulty = AimEvaluator.EvaluateDifficultyOf(current, includeSliders);
+                speedDifficulty = SpeedAimEvaluator.EvaluateDifficultyOf(current);
             }
 
-            if (Mods.Any(m => m is OsuModRelax))
-            {
-                speedDifficulty *= 0.0;
-            }
+            if (suppressSpeedComponent)
+                speedDifficulty = 0;
 
-            currentAimStrain *= decayAim;
-            currentAimStrain += aimDifficulty * (1 - decayAim) * skillMultiplierAim;
+            double newAimStrain = strainState.CurrentAimStrain * decayAim;
+            newAimStrain += aimDifficulty * (1 - decayAim) * skill_multiplier_aim;
 
-            currentSpeedStrain *= decaySpeed;
-            currentSpeedStrain += speedDifficulty * (1 - decaySpeed) * skillMultiplierSpeed;
+            double newSpeedStrain = strainState.CurrentSpeedStrain * decaySpeed;
+            newSpeedStrain += speedDifficulty * (1 - decaySpeed) * skill_multiplier_speed;
 
-            double totalStrain = DifficultyCalculationUtils.Norm(meanExponent, currentAimStrain, currentSpeedStrain) * skillMultiplierTotal;
+            return new StrainState(newAimStrain, newSpeedStrain);
+        }
+
+        /// <summary>
+        /// Combines the aim and speed components of a <see cref="StrainState"/> into a single overall strain value.
+        /// </summary>
+        public static double ComputeOverallStrain(StrainState strainState)
+        {
+            double totalStrain = DifficultyCalculationUtils.Norm(mean_exponent, strainState.CurrentAimStrain, strainState.CurrentSpeedStrain);
+            return totalStrain * skill_multiplier_total;
+        }
+
+        protected override double CalculateInitialStrain(double time, DifficultyHitObject current) =>
+            DifficultyCalculationUtils.Norm(mean_exponent,
+                strainState.CurrentAimStrain * strainDecayAim(time - current.Previous(0).StartTime),
+                strainState.CurrentSpeedStrain * strainDecaySpeed(time - current.Previous(0).StartTime)) * skill_multiplier_total;
+
+        protected override double StrainValueAt(DifficultyHitObject current)
+        {
+            bool isTouch = Mods.Any(m => m is OsuModTouchDevice);
+            bool suppressSpeedComponent = Mods.Any(m => m is OsuModRelax);
+
+            strainState = AdvanceStrainState(
+                strainState,
+                current,
+                isTouch,
+                IncludeSliders,
+                suppressSpeedComponent
+            );
+            double currentStrain = ComputeOverallStrain(strainState);
 
             if (current.BaseObject is Slider)
-                sliderStrains.Add(totalStrain);
+                sliderStrains.Add(currentStrain);
 
-            return totalStrain;
+            return currentStrain;
         }
 
         public double GetDifficultSliders()

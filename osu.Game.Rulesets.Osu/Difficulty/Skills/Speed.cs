@@ -1,16 +1,17 @@
-﻿// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
+// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
 using System.Collections.Generic;
-using osu.Game.Rulesets.Difficulty.Preprocessing;
-using osu.Game.Rulesets.Mods;
-using osu.Game.Rulesets.Osu.Difficulty.Evaluators;
-using osu.Game.Rulesets.Osu.Objects;
 using System.Linq;
+using osu.Game.Rulesets.Difficulty.Preprocessing;
 using osu.Game.Rulesets.Difficulty.Skills;
 using osu.Game.Rulesets.Difficulty.Utils;
+using osu.Game.Rulesets.Mods;
+using osu.Game.Rulesets.Osu.Difficulty.Evaluators;
 using osu.Game.Rulesets.Osu.Difficulty.Preprocessing;
+using osu.Game.Rulesets.Osu.Mods;
+using osu.Game.Rulesets.Osu.Objects;
 
 namespace osu.Game.Rulesets.Osu.Difficulty.Skills
 {
@@ -19,13 +20,12 @@ namespace osu.Game.Rulesets.Osu.Difficulty.Skills
     /// </summary>
     public class Speed : HarmonicSkill
     {
-        private double skillMultiplier => 1.04;
+        private const double skill_multiplier = 1.04;
+        private const double strain_decay_base = 0.3;
 
         private readonly List<double> sliderStrains = new List<double>();
 
         private double currentDifficulty;
-
-        private double strainDecayBase => 0.3;
 
         protected override double HarmonicScale => 20;
         protected override double DecayExponent => 0.85;
@@ -35,23 +35,45 @@ namespace osu.Game.Rulesets.Osu.Difficulty.Skills
         {
         }
 
-        private double strainDecay(double ms) => Math.Pow(strainDecayBase, ms / 1000);
+        private static double strainDecay(double ms) => Math.Pow(strain_decay_base, ms / 1000);
 
-        protected override double ObjectDifficultyOf(DifficultyHitObject current)
+        /// <summary>
+        /// Computes the next speed strain by applying decay and evaluating the current object's speed difficulty.
+        /// </summary>
+        public static double AdvanceStrainState(double currentStrain, DifficultyHitObject current, bool isTouch)
         {
             double decay = strainDecay(((OsuDifficultyHitObject)current).AdjustedDeltaTime);
 
-            currentDifficulty *= decay;
-            currentDifficulty += SpeedEvaluator.EvaluateDifficultyOf(current) * (1 - decay) * skillMultiplier;
+            double newStrain = currentStrain * decay;
+            double speedDifficulty = isTouch ?
+                TouchSpeedEvaluator.EvaluateDifficultyOf(current) : SpeedEvaluator.EvaluateDifficultyOf(current);
+
+            newStrain += speedDifficulty * (1 - decay) * skill_multiplier;
+            return newStrain;
+        }
+
+        /// <summary>
+        /// Scales the current speed strain by a rhythm multiplier to produce the final strain value.
+        /// </summary>
+        public static double ComputeOverallStrain(double currentStrain, double rhythm)
+        {
+            return currentStrain * rhythm;
+        }
+
+        protected override double ObjectDifficultyOf(DifficultyHitObject current)
+        {
+            bool isTouch = Mods.Any(m => m is OsuModTouchDevice);
+            double newStrainState = AdvanceStrainState(currentDifficulty, current, isTouch);
+            currentDifficulty = newStrainState;
 
             double currentRhythm = RhythmEvaluator.EvaluateDifficultyOf(current);
 
-            double totalDifficulty = currentDifficulty * currentRhythm;
+            double currentStrain = ComputeOverallStrain(newStrainState, currentRhythm);
 
             if (current.BaseObject is Slider)
-                sliderStrains.Add(totalDifficulty);
+                sliderStrains.Add(currentStrain);
 
-            return totalDifficulty;
+            return currentStrain;
         }
 
         public double RelevantNoteCount()

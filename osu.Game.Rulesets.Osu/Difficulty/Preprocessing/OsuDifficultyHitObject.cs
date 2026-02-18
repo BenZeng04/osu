@@ -1,4 +1,4 @@
-﻿// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
+// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
@@ -121,6 +121,12 @@ namespace osu.Game.Rulesets.Osu.Difficulty.Preprocessing
         /// </summary>
         public double SmallCircleBonus { get; private set; }
 
+        /// <summary>
+        /// Touch-specific data for this <see cref="OsuDifficultyHitObject"/>.
+        /// Populated by the result of <see cref="OsuTouchDataIncrementalState.Advance"/>.
+        /// </summary>
+        public OsuDifficultyHitObjectTouchData? TouchData { get; internal set; }
+
         private readonly OsuDifficultyHitObject? lastLastDifficultyObject;
         private readonly OsuDifficultyHitObject? lastDifficultyObject;
 
@@ -194,6 +200,11 @@ namespace osu.Game.Rulesets.Osu.Difficulty.Preprocessing
             return 0;
         }
 
+        public Vector2 GetEndCursorPosition()
+        {
+            return LazyEndPosition ?? BaseObject.StackedPosition;
+        }
+
         private void setDistances(double clockRate)
         {
             if (BaseObject is Slider currentSlider)
@@ -212,7 +223,7 @@ namespace osu.Game.Rulesets.Osu.Difficulty.Preprocessing
             // We will scale distances by this factor, so we can assume a uniform CircleSize among beatmaps.
             float scalingFactor = NORMALISED_RADIUS / (float)BaseObject.Radius;
 
-            Vector2 lastCursorPosition = lastDifficultyObject != null ? getEndCursorPosition(lastDifficultyObject) : LastObject.StackedPosition;
+            Vector2 lastCursorPosition = lastDifficultyObject != null ? lastDifficultyObject.GetEndCursorPosition() : LastObject.StackedPosition;
 
             JumpDistance = (LastObject.StackedPosition - BaseObject.StackedPosition).Length * scalingFactor;
             LazyJumpDistance = (BaseObject.StackedPosition - lastCursorPosition).Length * scalingFactor;
@@ -254,7 +265,7 @@ namespace osu.Game.Rulesets.Osu.Difficulty.Preprocessing
                 if (lastDifficultyObject!.BaseObject is Slider prevSlider && lastDifficultyObject.TravelDistance > 0)
                     lastCursorPosition = prevSlider.HeadCircle.StackedPosition;
 
-                Vector2 lastLastCursorPosition = getEndCursorPosition(lastLastDifficultyObject);
+                Vector2 lastLastCursorPosition = lastLastDifficultyObject.GetEndCursorPosition();
 
                 double angle = calculateAngle(BaseObject.StackedPosition, lastCursorPosition, lastLastCursorPosition);
                 double sliderAngle = calculateSliderAngle(lastDifficultyObject!, lastLastCursorPosition);
@@ -373,7 +384,7 @@ namespace osu.Game.Rulesets.Osu.Difficulty.Preprocessing
 
         private double calculateSliderAngle(OsuDifficultyHitObject lastDifficultyObject, Vector2 lastLastCursorPosition)
         {
-            Vector2 lastCursorPosition = getEndCursorPosition(lastDifficultyObject);
+            Vector2 lastCursorPosition = lastDifficultyObject.GetEndCursorPosition();
 
             if (lastDifficultyObject.BaseObject is Slider prevSlider && lastDifficultyObject.TravelDistance > 0)
             {
@@ -393,11 +404,6 @@ namespace osu.Game.Rulesets.Osu.Difficulty.Preprocessing
             float det = v1.X * v2.Y - v1.Y * v2.X;
 
             return Math.Abs(Math.Atan2(det, dot));
-        }
-
-        private Vector2 getEndCursorPosition(OsuDifficultyHitObject difficultyHitObject)
-        {
-            return difficultyHitObject.LazyEndPosition ?? difficultyHitObject.BaseObject.StackedPosition;
         }
     }
 }
